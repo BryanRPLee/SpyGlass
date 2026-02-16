@@ -1,12 +1,5 @@
 import { SteamClient } from '../clients/steamClient'
-import SteamID from 'steamid'
-
-export interface Match {
-	matchid?: string
-	matchtime?: number
-	watchablematchinfo?: any
-	roundstatsall?: any[]
-}
+import { Match } from '../models/match'
 
 export class MatchHistoryService {
 	private steamClient: SteamClient
@@ -44,11 +37,37 @@ export class MatchHistoryService {
 		})
 	}
 
-	public parseSteamID(steamId: string): SteamID {
-		try {
-			return new SteamID(steamId)
-		} catch (err) {
-			throw new Error('Invalid SteamID')
+	public async getMatchDetails(
+		steamId: string,
+		matchId: string
+	): Promise<Match | null> {
+		if (!this.steamClient.hasGCSession()) {
+			throw new Error('Not connected to GC')
 		}
+
+		return new Promise((resolve, reject) => {
+			const timeout = setTimeout(
+				() => reject(new Error('Request timeout')),
+				10000
+			)
+			const csgo = this.steamClient.getCSGOClient()
+
+			const handler = (matches: Match[]) => {
+				clearTimeout(timeout)
+				csgo.removeListener('matchList', handler)
+
+				const match = matches.find((m) => m.matchid === matchId)
+				resolve(match || null)
+			}
+
+			csgo.once('matchList', handler)
+			try {
+				csgo.requestRecentGames(steamId)
+			} catch (err) {
+				clearTimeout(timeout)
+				csgo.removeListener('matchList', handler)
+				reject(err)
+			}
+		})
 	}
 }
