@@ -108,12 +108,34 @@ export class MatchStorageService {
 	public async storePlayerProfile(steamId: string, profile: any) {
 		const accountId = profile.account_id ? BigInt(profile.account_id) : null
 
-		if (accountId) {
-			const existingPlayer = await this.prisma.player.findUnique({
-				where: { accountId }
+		try {
+			await this.prisma.player.upsert({
+				where: { id: steamId },
+				create: {
+					id: steamId,
+					accountId,
+					playerLevel: profile.player_level,
+					playerCurXp: profile.player_cur_xp,
+					vacBanned: profile.vac_banned || false,
+					penaltySeconds: profile.penalty_seconds,
+					penaltyReason: profile.penalty_reason
+				},
+				update: {
+					accountId,
+					playerLevel: profile.player_level,
+					playerCurXp: profile.player_cur_xp,
+					vacBanned: profile.vac_banned || false,
+					penaltySeconds: profile.penalty_seconds,
+					penaltyReason: profile.penalty_reason,
+					lastSeen: new Date()
+				}
 			})
+		} catch (error: any) {
+			if (error.code === 'P2002' && error.meta?.modelName === 'Player') {
+				console.warn(
+					`accountId conflict for ${steamId}, storing without accountId`
+				)
 
-			if (existingPlayer && existingPlayer.id !== steamId) {
 				await this.prisma.player.upsert({
 					where: { id: steamId },
 					create: {
@@ -134,31 +156,10 @@ export class MatchStorageService {
 						lastSeen: new Date()
 					}
 				})
-				return
+			} else {
+				throw error
 			}
 		}
-
-		await this.prisma.player.upsert({
-			where: { id: steamId },
-			create: {
-				id: steamId,
-				accountId,
-				playerLevel: profile.player_level,
-				playerCurXp: profile.player_cur_xp,
-				vacBanned: profile.vac_banned || false,
-				penaltySeconds: profile.penalty_seconds,
-				penaltyReason: profile.penalty_reason
-			},
-			update: {
-				accountId,
-				playerLevel: profile.player_level,
-				playerCurXp: profile.player_cur_xp,
-				vacBanned: profile.vac_banned || false,
-				penaltySeconds: profile.penalty_seconds,
-				penaltyReason: profile.penalty_reason,
-				lastSeen: new Date()
-			}
-		})
 	}
 
 	public async getUndiscoveredPlayers(limit: number): Promise<Player[]> {

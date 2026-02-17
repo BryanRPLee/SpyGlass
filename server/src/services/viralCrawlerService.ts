@@ -4,6 +4,13 @@ import { PlayerProfileService } from './playerProfileService'
 import { MatchStorageService } from './matchStorageService'
 import { PrismaService } from './prismaService'
 
+interface TaskResult {
+	taskId: string
+	playerId: string
+	status: 'completed' | 'failed' | 'rate_limited' | 'invalid_account'
+	error?: string
+}
+
 export class ViralCrawlerService {
 	private prisma: PrismaClient
 	private matchHistoryService: MatchHistoryService
@@ -13,13 +20,19 @@ export class ViralCrawlerService {
 	private intervalMs: number
 	private batchSize: number
 	private maxRetries: number
+	private concurrencyLimit: number
+	private minDelayMs: number
+	private rateLimitBackoffMs: number
 
 	constructor(
 		matchHistoryService: MatchHistoryService,
 		playerProfileService: PlayerProfileService,
-		intervalMs = 5000,
-		batchSize = 5,
-		maxRetries = 3
+		intervalMs = 1000,
+		batchSize = 20,
+		maxRetries = 3,
+		concurrencyLimit = 10,
+		minDelayMs = 500,
+		rateLimitBackoffMs = 30000
 	) {
 		this.prisma = PrismaService.getInstance()
 		this.matchHistoryService = matchHistoryService
@@ -28,13 +41,16 @@ export class ViralCrawlerService {
 		this.intervalMs = intervalMs
 		this.batchSize = batchSize
 		this.maxRetries = maxRetries
+		this.concurrencyLimit = concurrencyLimit
+		this.minDelayMs = minDelayMs
+		this.rateLimitBackoffMs = rateLimitBackoffMs
 	}
 
 	public async seed(steamIds: string[]) {
 		console.log(`Seeding crawler with ${steamIds.length} player(s)`)
 
-		for (const steamId of steamIds) {
-			await this.prisma.crawlQueue.upsert({
+		const crawlQueueOperations = steamIds.map((steamId) =>
+			this.prisma.crawlQueue.upsert({
 				where: { playerId: steamId },
 				create: {
 					playerId: steamId,
@@ -46,8 +62,10 @@ export class ViralCrawlerService {
 					status: CrawlStatus.PENDING
 				}
 			})
+		)
 
-			await this.prisma.player.upsert({
+		const playerOperations = steamIds.map((steamId) =>
+			this.prisma.player.upsert({
 				where: { id: steamId },
 				create: {
 					id: steamId
@@ -56,7 +74,9 @@ export class ViralCrawlerService {
 					lastSeen: new Date()
 				}
 			})
-		}
+		)
+
+		await Promise.all([...crawlQueueOperations, ...playerOperations])
 
 		console.log(`Seeded ${steamIds.length} players to crawl queue`)
 	}
@@ -69,6 +89,9 @@ export class ViralCrawlerService {
 
 		this.isRunning = true
 		console.log('Starting viral crawler...')
+		console.log(
+			`Config: batchSize=${this.batchSize}, concurrency=${this.concurrencyLimit}, interval=${this.intervalMs}ms`
+		)
 		this.crawlLoop()
 	}
 
@@ -107,9 +130,9 @@ export class ViralCrawlerService {
 
 		console.log(`Processing batch of ${tasks.length} tasks`)
 
-		for (const task of tasks) {
-			try {
-				await this.prisma.crawlQueue.update({
+		await Promise.all(
+			tasks.map((task) =>
+				this.prisma.crawlQueue.update({
 					where: { id: task.id },
 					data: {
 						status: CrawlStatus.IN_PROGRESS,
@@ -117,86 +140,191 @@ export class ViralCrawlerService {
 						lastAttempt: new Date()
 					}
 				})
+			)
+		)
 
-				await this.crawlPlayer(task.playerId)
+		const results = await this.processTasksWithConcurrency(tasks)
+		await this.batchUpdateTaskResults(results)
 
-				await this.prisma.crawlQueue.update({
-					where: { id: task.id },
-					data: {
-						status: CrawlStatus.COMPLETED
-					}
-				})
+		const rateLimitedCount = results.filter(
+			(r) => r.status === 'rate_limited'
+		).length
+		if (rateLimitedCount > 0) {
+			console.log(
+				`Rate limited on ${rateLimitedCount} tasks, backing off for ${this.rateLimitBackoffMs / 1000}s...`
+			)
+			await this.sleep(this.rateLimitBackoffMs)
+		}
+	}
 
-				console.log(`Completed crawl for player ${task.playerId}`)
-			} catch (error: any) {
-				console.error(
-					`Error crawling player ${task.playerId}:`,
-					error.message
-				)
+	private async processTasksWithConcurrency(
+		tasks: Array<{
+			id: string
+			playerId: string
+			attempts: number
+		}>
+	): Promise<TaskResult[]> {
+		const results: TaskResult[] = []
+		const chunks = this.chunkArray(tasks, this.concurrencyLimit)
 
-				const isRateLimited =
-					error.message?.includes('RATE') ||
-					error.message?.includes('timeout')
+		for (const chunk of chunks) {
+			const chunkResults = await Promise.allSettled(
+				chunk.map((task) => this.processSingleTask(task))
+			)
 
-				const isInvalidAccount =
-					error.message?.includes('timeout') && task.attempts >= 1
-
-				await this.prisma.crawlQueue.update({
-					where: { id: task.id },
-					data: {
-						status: isInvalidAccount
-							? CrawlStatus.FAILED
-							: isRateLimited
-								? CrawlStatus.RATE_LIMITED
-								: task.attempts + 1 >= this.maxRetries
-									? CrawlStatus.FAILED
-									: CrawlStatus.PENDING,
-						error: error.message
-					}
-				})
-
-				if (isRateLimited && !isInvalidAccount) {
-					console.log('Rate limited, backing off for 60s...')
-					await this.sleep(60000)
-				} else if (isInvalidAccount) {
-					console.log(
-						`Skipping invalid/private account ${task.playerId}`
-					)
+			chunkResults.forEach((result, index) => {
+				if (result.status === 'fulfilled') {
+					results.push(result.value)
+				} else {
+					results.push({
+						taskId: chunk[index].id,
+						playerId: chunk[index].playerId,
+						status: 'failed',
+						error: result.reason?.message || 'Unknown error'
+					})
 				}
+			})
+
+			if (chunks.length > 1) {
+				await this.sleep(this.minDelayMs)
+			}
+		}
+
+		return results
+	}
+
+	private async processSingleTask(task: {
+		id: string
+		playerId: string
+		attempts: number
+	}): Promise<TaskResult> {
+		try {
+			await this.crawlPlayer(task.playerId)
+			console.log(`✓ Completed crawl for player ${task.playerId}`)
+			return {
+				taskId: task.id,
+				playerId: task.playerId,
+				status: 'completed'
+			}
+		} catch (error: any) {
+			console.error(
+				`✗ Error crawling player ${task.playerId}:`,
+				error.message
+			)
+
+			const isRateLimited =
+				error.message?.includes('RATE') ||
+				error.message?.includes('timeout')
+			const isInvalidAccount =
+				error.message?.includes('timeout') && task.attempts >= 1
+
+			let status: TaskResult['status'] = 'failed'
+			if (isInvalidAccount) {
+				status = 'invalid_account'
+				console.log(`  └─ Skipping invalid/private account`)
+			} else if (isRateLimited) {
+				status = 'rate_limited'
+				console.log(`  └─ Rate limited`)
 			}
 
-			await this.sleep(8000)
+			return {
+				taskId: task.id,
+				playerId: task.playerId,
+				status,
+				error: error.message
+			}
 		}
+	}
+
+	private async batchUpdateTaskResults(results: TaskResult[]) {
+		const completed = results
+			.filter((r) => r.status === 'completed')
+			.map((r) => r.taskId)
+		const failed = results
+			.filter((r) => r.status === 'failed')
+			.map((r) => r.taskId)
+		const rateLimited = results
+			.filter((r) => r.status === 'rate_limited')
+			.map((r) => r.taskId)
+		const invalidAccounts = results
+			.filter((r) => r.status === 'invalid_account')
+			.map((r) => r.taskId)
+
+		await Promise.all([
+			completed.length > 0
+				? this.prisma.crawlQueue.updateMany({
+						where: { id: { in: completed } },
+						data: { status: CrawlStatus.COMPLETED }
+					})
+				: Promise.resolve(),
+			failed.length > 0
+				? this.prisma.crawlQueue.updateMany({
+						where: { id: { in: failed } },
+						data: { status: CrawlStatus.FAILED }
+					})
+				: Promise.resolve(),
+			rateLimited.length > 0
+				? this.prisma.crawlQueue.updateMany({
+						where: { id: { in: rateLimited } },
+						data: { status: CrawlStatus.RATE_LIMITED }
+					})
+				: Promise.resolve(),
+			invalidAccounts.length > 0
+				? this.prisma.crawlQueue.updateMany({
+						where: { id: { in: invalidAccounts } },
+						data: { status: CrawlStatus.FAILED }
+					})
+				: Promise.resolve()
+		])
+
+		const resultsWithErrors = results.filter((r) => r.error)
+		if (resultsWithErrors.length > 0) {
+			await Promise.all(
+				resultsWithErrors.map((r) =>
+					this.prisma.crawlQueue.update({
+						where: { id: r.taskId },
+						data: { error: r.error }
+					})
+				)
+			)
+		}
+
+		console.log(
+			`Batch results: ✓ ${completed.length} | ✗ ${failed.length} | ⏸ ${rateLimited.length} | ⊗ ${invalidAccounts.length}`
+		)
 	}
 
 	private async crawlPlayer(steamId: string) {
 		console.log(`Crawling player ${steamId}...`)
 
-		try {
-			const profile =
-				await this.playerProfileService.getPlayerProfile(steamId)
-			if (profile) {
-				await this.matchStorageService.storePlayerProfile(
-					steamId,
-					profile
+		const [profile, matches] = await Promise.all([
+			this.playerProfileService
+				.getPlayerProfile(steamId)
+				.catch((error) => {
+					console.warn(
+						`  └─ Could not fetch profile for ${steamId}:`,
+						error.message
+					)
+					return null
+				}),
+			this.matchHistoryService.getPlayerMatchHistory(steamId)
+		])
+
+		if (profile) {
+			await this.matchStorageService.storePlayerProfile(steamId, profile)
+		}
+
+		console.log(
+			`  └─ Found ${matches.length} matches for player ${steamId}`
+		)
+
+		if (matches.length > 0) {
+			await Promise.all(
+				matches.map((match) =>
+					this.matchStorageService.storeMatch(match, steamId)
 				)
-			}
-		} catch (error) {
-			console.warn(`Could not fetch profile for ${steamId}:`, error)
+			)
 		}
-
-		await this.sleep(2000)
-
-		const matches =
-			await this.matchHistoryService.getPlayerMatchHistory(steamId)
-
-		console.log(`Found ${matches.length} matches for player ${steamId}`)
-
-		for (const match of matches) {
-			await this.matchStorageService.storeMatch(match, steamId)
-		}
-
-		await this.sleep(1000)
 	}
 
 	private async logStats() {
@@ -234,6 +362,14 @@ export class ViralCrawlerService {
 				avgMatchesPerPlayer: crawlStats.avgMatchesPerPlayer
 			}
 		})
+	}
+
+	private chunkArray<T>(array: T[], chunkSize: number): T[][] {
+		const chunks: T[][] = []
+		for (let i = 0; i < array.length; i += chunkSize) {
+			chunks.push(array.slice(i, i + chunkSize))
+		}
+		return chunks
 	}
 
 	private sleep(ms: number) {

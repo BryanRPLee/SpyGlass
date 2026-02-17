@@ -264,25 +264,23 @@ export class Server {
 			}
 		})
 
-		this.app.post('/api/crawler/retry-failed', async (req, res) => {
+		this.app.post('/api/crawler/reset-stuck', async (req, res) => {
 			try {
 				const result =
 					await PrismaService.getInstance().crawlQueue.updateMany({
 						where: {
-							status: {
-								in: ['FAILED', 'RATE_LIMITED']
-							}
+							status: 'IN_PROGRESS'
 						},
 						data: {
 							status: 'PENDING',
-							attempts: 0,
-							error: null
+							attempts: 0
 						}
 					})
 
 				res.json({
 					success: true,
-					message: `Re-queued ${result.count} failed crawls`
+					message: `Reset ${result.count} stuck tasks`,
+					count: result.count
 				})
 			} catch (err) {
 				res.status(500).json({
