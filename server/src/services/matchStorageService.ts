@@ -40,36 +40,76 @@ export class MatchStorageService {
 					id: matchId,
 					matchTime: new Date(match.matchtime * 1000),
 					map: match.roundstatsall?.[0]?.map || null,
-					duration: match.roundstatsall?.[0]?.match_duration || null,
-					maxRounds: match.roundstatsall?.[0].max_rounds || null,
+					duration:
+						match.roundstatsall?.[match.roundstatsall.length - 1]
+							?.match_duration || null,
+					maxRounds:
+						match.roundstatsall?.[match.roundstatsall.length - 1]
+							?.max_rounds || null,
 					serverIp: match.watchablematchinfo?.server_ip
 						? BigInt(match.watchablematchinfo.server_ip)
 						: null,
 					tvPort: match.watchablematchinfo?.tv_port || null,
 					gameType: match.watchablematchinfo?.game_type || null,
-					roundStatsRaw: JSON.stringify(match.roundstatsall || []),
-					processed: false
+					processed: true
 				}
 			})
 
 			if (match.roundstatsall) {
 				for (let i = 0; i < match.roundstatsall.length; i++) {
 					const roundStat = match.roundstatsall[i]
-					await tx.round.create({
+
+					const round = await tx.round.create({
 						data: {
 							matchId: prismaMatch.id,
-							roundNumber: roundStat.round || i,
-							map: roundStat.map,
+							roundNumber: i + 1,
+							duration: roundStat.match_duration,
 							roundResult: roundStat.round_result,
 							matchResult: roundStat.match_result,
-							teamScores: JSON.stringify(roundStat.team_scores),
-							kills: JSON.stringify(roundStat.kills),
-							deaths: JSON.stringify(roundStat.deaths),
-							assists: JSON.stringify(roundStat.assists),
-							scores: JSON.stringify(roundStat.scores),
-							mvps: JSON.stringify(roundStat.mvps)
+							teamScores: roundStat.team_scores
+								? JSON.stringify(roundStat.team_scores)
+								: null
 						}
 					})
+
+					if (roundStat.reservation?.account_ids) {
+						for (
+							let playerIndex = 0;
+							playerIndex <
+							roundStat.reservation.account_ids.length;
+							playerIndex++
+						) {
+							const accountId =
+								roundStat.reservation.account_ids[playerIndex]
+							if (!accountId) continue
+
+							const steamId64 =
+								this.accountIdToSteamId64(accountId)
+
+							await tx.roundPlayer.create({
+								data: {
+									roundId: round.id,
+									playerId: steamId64,
+									playerIndex,
+									accountId: BigInt(accountId),
+									kills: roundStat.kills?.[playerIndex] || 0,
+									deaths:
+										roundStat.deaths?.[playerIndex] || 0,
+									assists:
+										roundStat.assists?.[playerIndex] || 0,
+									score: roundStat.scores?.[playerIndex] || 0,
+									mvps: roundStat.mvps?.[playerIndex] || 0,
+									headshots:
+										roundStat.enemy_headshots?.[
+											playerIndex
+										] || 0,
+									enemyKills:
+										roundStat.enemy_kills?.[playerIndex] ||
+										0
+								}
+							})
+						}
+					}
 				}
 			}
 
@@ -187,19 +227,32 @@ export class MatchStorageService {
 	}
 
 	public async getCrawlStats() {
-		const [totalPlayers, totalMatches, totalMatchPlayers] =
-			await Promise.all([
-				this.prisma.player.count(),
-				this.prisma.match.count(),
-				this.prisma.matchPlayer.count()
-			])
+		const [
+			totalPlayers,
+			totalMatches,
+			totalMatchPlayers,
+			totalRounds,
+			totalRoundPlayers
+		] = await Promise.all([
+			this.prisma.player.count(),
+			this.prisma.match.count(),
+			this.prisma.matchPlayer.count(),
+			this.prisma.round.count(),
+			this.prisma.roundPlayer.count()
+		])
 		const avgMatchesPerPlayer =
 			totalPlayers > 0 ? totalMatchPlayers / totalPlayers : 0
+		const avgRoundsPerMatch =
+			totalMatches > 0 ? totalRounds / totalMatches : 0
+
 		return {
 			totalPlayers,
 			totalMatches,
 			totalMatchPlayers,
-			avgMatchesPerPlayer: Math.round(avgMatchesPerPlayer * 100) / 100
+			totalRounds,
+			totalRoundPlayers,
+			avgMatchesPerPlayer: Math.round(avgMatchesPerPlayer * 100) / 100,
+			avgRoundsPerMatch: Math.round(avgRoundsPerMatch * 100) / 100
 		}
 	}
 
