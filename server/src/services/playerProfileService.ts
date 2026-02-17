@@ -18,7 +18,7 @@ export class PlayerProfileService {
 		return new Promise((resolve, reject) => {
 			const timeout = setTimeout(
 				() => reject(new Error('Request timeout')),
-				10000
+				30000
 			)
 			const csgo = this.steamClient.getCSGOClient()
 

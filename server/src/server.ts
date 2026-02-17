@@ -4,12 +4,17 @@ import { MatchHistoryService } from './services/matchHistoryService'
 import { Config } from './config/config'
 import { errorHandler } from './middleware/errorHandler'
 import { PlayerProfileService } from './services/playerProfileService'
+import { MatchStorageService } from './services/matchStorageService'
+import { ViralCrawlerService } from './services/viralCrawlerServer'
+import { PrismaService } from './services/prismaService'
 
 export class Server {
 	private app: Express
 	private readonly steamClient: SteamClient
 	private matchHistoryService: MatchHistoryService
 	private playerProfileService: PlayerProfileService
+	private matchStorageService: MatchStorageService
+	private viralCrawlerService?: ViralCrawlerService
 	private config: Config
 
 	constructor() {
@@ -21,6 +26,7 @@ export class Server {
 		)
 		this.matchHistoryService = new MatchHistoryService(this.steamClient)
 		this.playerProfileService = new PlayerProfileService(this.steamClient)
+		this.matchStorageService = new MatchStorageService()
 
 		this.setupMiddleware()
 		this.setupRoutes()
@@ -98,6 +104,188 @@ export class Server {
 				}
 			}
 		)
+
+		this.app.post('/api/crawler/seed', async (req, res) => {
+			try {
+				const { steamIds } = req.body
+
+				if (
+					!Array.isArray(steamIds) ||
+					steamIds.length === 0 ||
+					!steamIds.every((id) => typeof id === 'string')
+				) {
+					return res.status(400).json({
+						success: false,
+						error: 'steamIds must be a non-empty array of strings'
+					})
+				}
+
+				if (!this.viralCrawlerService) {
+					return res.status(400).json({
+						success: false,
+						error: 'Crawler is not enabled'
+					})
+				}
+
+				await this.viralCrawlerService.seed(steamIds)
+
+				res.json({
+					success: true,
+					message: `Seeded ${steamIds.length} player(s)`
+				})
+			} catch (err) {
+				res.status(500).json({
+					success: false,
+					error: err instanceof Error ? err.message : 'Unknown error'
+				})
+			}
+		})
+
+		this.app.get('/api/crawler/stats', async (req, res) => {
+			try {
+				const stats = await this.matchStorageService.getCrawlStats()
+
+				res.json({
+					success: true,
+					stats
+				})
+			} catch (err) {
+				res.status(500).json({
+					success: false,
+					error: err instanceof Error ? err.message : 'Unknown error'
+				})
+			}
+		})
+
+		this.app.post('/api/crawler/start', async (req, res) => {
+			try {
+				if (!this.viralCrawlerService) {
+					this.viralCrawlerService = new ViralCrawlerService(
+						this.matchHistoryService,
+						this.playerProfileService,
+						parseInt(process.env.CRAWLER_INTERVAL_MS || '5000', 10),
+						parseInt(process.env.CRAWLER_BATCH_SIZE || '5', 10),
+						parseInt(process.env.CRAWLER_MAX_RETRIES || '3', 10)
+					)
+				}
+
+				await this.viralCrawlerService.start()
+
+				res.json({
+					success: true,
+					message: 'Crawler started'
+				})
+			} catch (err) {}
+		})
+
+		this.app.post('/api/crawler/stop', async (req, res) => {
+			try {
+				if (!this.viralCrawlerService) {
+					return res.status(400).json({
+						success: false,
+						error: 'Crawler is not running'
+					})
+				}
+
+				this.viralCrawlerService.stop()
+
+				res.json({
+					success: true,
+					message: 'Crawler stopped'
+				})
+			} catch (err) {
+				res.status(500).json({
+					success: false,
+					error: err instanceof Error ? err.message : 'Unknown error'
+				})
+			}
+		})
+
+		this.app.post('/api/crawler/backfill', async (req, res) => {
+			try {
+				const { limit, priority } = req.body
+
+				const uncrawledPlayers =
+					await PrismaService.getInstance().player.findMany({
+						where: {
+							OR: [
+								{
+									id: {
+										notIn: await PrismaService.getInstance()
+											.crawlQueue.findMany({
+												select: { playerId: true }
+											})
+											.then((results) =>
+												results.map((r) => r.playerId)
+											)
+									}
+								}
+							]
+						},
+						take: limit || 1000,
+						orderBy: {
+							lastSeen: 'desc'
+						}
+					})
+
+				let added = 0
+				for (const player of uncrawledPlayers) {
+					await PrismaService.getInstance().crawlQueue.upsert({
+						where: { playerId: player.id },
+						create: {
+							playerId: player.id,
+							priority: priority || 1,
+							status: 'PENDING'
+						},
+						update: {
+							status: 'PENDING',
+							attempts: 0,
+							error: null
+						}
+					})
+					added++
+				}
+
+				res.json({
+					success: true,
+					message: `Added ${added} players to crawl queue`,
+					playersFound: uncrawledPlayers.length
+				})
+			} catch (err) {
+				res.status(500).json({
+					success: false,
+					error: err instanceof Error ? err.message : 'Unknown error'
+				})
+			}
+		})
+
+		this.app.post('/api/crawler/retry-failed', async (req, res) => {
+			try {
+				const result =
+					await PrismaService.getInstance().crawlQueue.updateMany({
+						where: {
+							status: {
+								in: ['FAILED', 'RATE_LIMITED']
+							}
+						},
+						data: {
+							status: 'PENDING',
+							attempts: 0,
+							error: null
+						}
+					})
+
+				res.json({
+					success: true,
+					message: `Re-queued ${result.count} failed crawls`
+				})
+			} catch (err) {
+				res.status(500).json({
+					success: false,
+					error: err instanceof Error ? err.message : 'Unknown error'
+				})
+			}
+		})
 	}
 
 	public async start() {
@@ -108,6 +296,18 @@ export class Server {
 				console.log(
 					`Connected to Steam as: ${this.config.steamUsername}`
 				)
+
+				const crawlerEnabled = process.env.CRAWLER_ENABLED === 'true'
+				if (crawlerEnabled) {
+					console.log('Auto-starting crawler...')
+					this.viralCrawlerService = new ViralCrawlerService(
+						this.matchHistoryService,
+						this.playerProfileService,
+						parseInt(process.env.CRAWLER_INTERVAL_MS || '5000', 10),
+						parseInt(process.env.CRAWLER_BATCH_SIZE || '5', 10),
+						parseInt(process.env.CRAWLER_MAX_RETRIES || '3', 10)
+					)
+				}
 			})
 		} catch (err) {
 			console.error('Failed to start server:', err)
@@ -152,6 +352,15 @@ export class Server {
 	}
 
 	public async stop() {
+		console.log('Stopping server...')
+
+		if (this.viralCrawlerService) {
+			this.viralCrawlerService.stop()
+		}
+
+		await PrismaService.disconnect()
 		await this.steamClient.disconnect()
+
+		console.log('Server stopped')
 	}
 }

@@ -1,0 +1,125 @@
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider = "sqlite"
+}
+
+model Player {
+    id                  String        @id
+    accountId           BigInt?       @unique
+    lastSeen            DateTime      @updatedAt
+    createdAt           DateTime      @default(now())
+    playerLevel         Int?
+    playerCurXp         Int?
+    vacBanned           Boolean       @default(false)
+    penaltySeconds      Int?
+    penaltyReason       Int?
+    matchParticipations MatchPlayer[]
+    discoveredFrom      Player?       @relation("PlayerDiscovery", fields: [discoveredFromId], references: [id])
+    discoveredFromId    String?
+    discoveredPlayers   Player[]      @relation("PlayerDiscovery")
+    totalMatches        Int           @default(0)
+    totalKills          Int           @default(0)
+    totalDeaths         Int           @default(0)
+    totalAssists        Int           @default(0)
+    totalMvps           Int           @default(0)
+
+    @@index([lastSeen])
+    @@index([discoveredFromId])
+}
+
+model Match {
+    id            String        @id
+    matchTime     DateTime
+    createdAt     DateTime      @default(now())
+    map           String?
+    duration      Int?
+    maxRounds     Int?
+    serverIp      BigInt?
+    tvPort        Int?
+    gameType      Int?
+    processed     Boolean       @default(false)
+    roundStatsRaw String?
+    players       MatchPlayer[]
+    rounds        Round[]
+
+    @@index([matchTime])
+    @@index([processed])
+    @@index([map])
+}
+
+model MatchPlayer {
+    id        String   @id @default(cuid())
+    matchId   String
+    playerId  String
+    createdAt DateTime @default(now())
+    slot      Int?
+    team      Int?
+    kills     Int      @default(0)
+    deaths    Int      @default(0)
+    assists   Int      @default(0)
+    mvps      Int      @default(0)
+    score     Int      @default(0)
+    match     Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+    player    Player   @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+    @@unique([matchId, playerId])
+    @@index([playerId])
+    @@index([matchId])
+}
+
+model Round {
+    id          String   @id @default(cuid())
+    matchId     String
+    roundNumber Int
+    createdAt   DateTime @default(now())
+    map         String?
+    roundResult Int?
+    matchResult Int?
+    teamScores  String?
+    kills       String?
+    deaths      String?
+    assists     String?
+    scores      String?
+    mvps        String?
+    match       Match    @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+    @@unique([matchId, roundNumber])
+    @@index([matchId])
+}
+
+model CrawlQueue {
+    id          String      @id @default(cuid())
+    playerId    String      @unique
+    priority    Int         @default(0)
+    attempts    Int         @default(0)
+    lastAttempt DateTime?
+    createdAt   DateTime    @default(now())
+    status      CrawlStatus @default(PENDING)
+    error       String?
+
+    @@index([status, priority])
+    @@index([createdAt])
+}
+
+enum CrawlStatus {
+    PENDING
+    IN_PROGRESS
+    COMPLETED
+    FAILED
+    RATE_LIMITED
+}
+
+model CrawlStats {
+    id                  String   @id @default(cuid())
+    timestamp           DateTime @default(now())
+    totalPlayers        Int
+    totalMatches        Int
+    pendingCrawls       Int
+    failedCrawls        Int
+    avgMatchesPerPlayer Float
+
+    @@index([timestamp])
+}
