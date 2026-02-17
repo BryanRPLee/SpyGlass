@@ -216,6 +216,10 @@ A: The crawler never fetches more than 8 matches per player, but by connecting t
 
 A: Yes. The more seed IDs and the longer you let it run, the larger your web of tracked matches and players will be.
 
+**Q: Are there any limitations?**
+
+A: Yes. For players that have private profiles or are not opted-in to match tracking, the GC will not publish their data.
+
 ---
 
 **No more losing data after 8 games.**

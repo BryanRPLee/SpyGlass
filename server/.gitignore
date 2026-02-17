@@ -21,3 +21,4 @@ Thumbs.db
 npm-debug.log*
 
 .sessions/
+prisma/migrations/

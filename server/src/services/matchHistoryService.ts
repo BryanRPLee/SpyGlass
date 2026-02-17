@@ -1,5 +1,6 @@
 import { SteamClient } from '../clients/steamClient'
 import { Match } from '../models/match'
+import SteamID from 'steamid'
 
 export class MatchHistoryService {
 	private steamClient: SteamClient
@@ -14,24 +15,45 @@ export class MatchHistoryService {
 		}
 
 		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(
-				() => reject(new Error('Request timeout')),
-				30000
-			)
+			const timeout = setTimeout(() => {
+				csgo.removeListener('matchList', handler)
+				console.warn(
+					`Timeout: No match data received for ${steamId} after 30s`
+				)
+				console.warn(
+					`This usually means: no CS2 matches, private settings, or account doesn't own CS2`
+				)
+				resolve([])
+			}, 30000)
 			const csgo = this.steamClient.getCSGOClient()
 
-			const handler = (matches: Match[]) => {
+			const handler = (matches: Match[], requestType: any) => {
 				clearTimeout(timeout)
 				csgo.removeListener('matchList', handler)
+
+				console.log(`Received match list for ${steamId}:`, {
+					matchCount: matches?.length || 0,
+					requestType: requestType
+				})
+
 				resolve(matches || [])
 			}
 
 			csgo.once('matchList', handler)
+
 			try {
-				csgo.requestRecentGames(steamId)
+				const sid = new SteamID(steamId)
+				console.log(
+					`Requesting matches for SteamID: ${steamId} (AccountID: ${sid.accountid})`
+				)
+				csgo.requestRecentGames(sid)
 			} catch (err) {
 				clearTimeout(timeout)
 				csgo.removeListener('matchList', handler)
+				console.error(
+					`Error sending match request for ${steamId}:`,
+					err
+				)
 				reject(err)
 			}
 		})
@@ -46,10 +68,11 @@ export class MatchHistoryService {
 		}
 
 		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(
-				() => reject(new Error('Request timeout')),
-				30000
-			)
+			const timeout = setTimeout(() => {
+				csgo.removeListener('matchList', handler)
+				console.warn(`No match details received for ${steamId}`)
+				resolve(null)
+			}, 30000)
 			const csgo = this.steamClient.getCSGOClient()
 
 			const handler = (matches: Match[]) => {
@@ -62,7 +85,8 @@ export class MatchHistoryService {
 
 			csgo.once('matchList', handler)
 			try {
-				csgo.requestRecentGames(steamId)
+				const sid = new SteamID(steamId)
+				csgo.requestRecentGames(sid)
 			} catch (err) {
 				clearTimeout(timeout)
 				csgo.removeListener('matchList', handler)

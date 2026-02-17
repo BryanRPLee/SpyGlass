@@ -130,7 +130,7 @@ export class ViralCrawlerService {
 				console.log(`Completed crawl for player ${task.playerId}`)
 			} catch (error: any) {
 				console.error(
-					`✗ Error crawling player ${task.playerId}:`,
+					`Error crawling player ${task.playerId}:`,
 					error.message
 				)
 
@@ -138,21 +138,30 @@ export class ViralCrawlerService {
 					error.message?.includes('RATE') ||
 					error.message?.includes('timeout')
 
+				const isInvalidAccount =
+					error.message?.includes('timeout') && task.attempts >= 1
+
 				await this.prisma.crawlQueue.update({
 					where: { id: task.id },
 					data: {
-						status: isRateLimited
-							? CrawlStatus.RATE_LIMITED
-							: task.attempts + 1 >= this.maxRetries
-								? CrawlStatus.FAILED
-								: CrawlStatus.PENDING,
+						status: isInvalidAccount
+							? CrawlStatus.FAILED
+							: isRateLimited
+								? CrawlStatus.RATE_LIMITED
+								: task.attempts + 1 >= this.maxRetries
+									? CrawlStatus.FAILED
+									: CrawlStatus.PENDING,
 						error: error.message
 					}
 				})
 
-				if (isRateLimited) {
+				if (isRateLimited && !isInvalidAccount) {
 					console.log('Rate limited, backing off for 60s...')
 					await this.sleep(60000)
+				} else if (isInvalidAccount) {
+					console.log(
+						`Skipping invalid/private account ${task.playerId}`
+					)
 				}
 			}
 
@@ -176,7 +185,7 @@ export class ViralCrawlerService {
 			console.warn(`Could not fetch profile for ${steamId}:`, error)
 		}
 
-		await this.sleep(10000)
+		await this.sleep(2000)
 
 		const matches =
 			await this.matchHistoryService.getPlayerMatchHistory(steamId)
@@ -187,7 +196,7 @@ export class ViralCrawlerService {
 			await this.matchStorageService.storeMatch(match, steamId)
 		}
 
-		await this.sleep(5000)
+		await this.sleep(1000)
 	}
 
 	private async logStats() {

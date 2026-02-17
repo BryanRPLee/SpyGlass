@@ -1,5 +1,6 @@
 import { SteamClient } from '../clients/steamClient'
 import { PlayerProfile } from '../models/player'
+import SteamID from 'steamid'
 
 export class PlayerProfileService {
 	private steamClient: SteamClient
@@ -16,10 +17,11 @@ export class PlayerProfileService {
 		}
 
 		return new Promise((resolve, reject) => {
-			const timeout = setTimeout(
-				() => reject(new Error('Request timeout')),
-				30000
-			)
+			const timeout = setTimeout(() => {
+				csgo.removeListener('playersProfile', handler)
+				console.warn(`No profile received for ${steamId}`)
+				resolve(null)
+			}, 30000)
 			const csgo = this.steamClient.getCSGOClient()
 
 			const handler = (profile: PlayerProfile) => {
@@ -30,7 +32,8 @@ export class PlayerProfileService {
 
 			csgo.once('playersProfile', handler)
 			try {
-				csgo.requestPlayersProfile(steamId)
+				const sid = new SteamID(steamId)
+				csgo.requestPlayersProfile(sid)
 			} catch (err) {
 				clearTimeout(timeout)
 				csgo.removeListener('playersProfile', handler)

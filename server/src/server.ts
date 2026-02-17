@@ -5,7 +5,7 @@ import { Config } from './config/config'
 import { errorHandler } from './middleware/errorHandler'
 import { PlayerProfileService } from './services/playerProfileService'
 import { MatchStorageService } from './services/matchStorageService'
-import { ViralCrawlerService } from './services/viralCrawlerServer'
+import { ViralCrawlerService } from './services/viralCrawlerService'
 import { PrismaService } from './services/prismaService'
 
 export class Server {
@@ -205,24 +205,29 @@ export class Server {
 			try {
 				const { limit, priority } = req.body
 
+				const processedPlayerIds =
+					await PrismaService.getInstance().crawlQueue.findMany({
+						where: {
+							status: {
+								in: ['COMPLETED', 'IN_PROGRESS', 'FAILED']
+							}
+						},
+						select: { playerId: true }
+					})
+
+				const processedIds = processedPlayerIds.map((p) => p.playerId)
+
 				const uncrawledPlayers =
 					await PrismaService.getInstance().player.findMany({
 						where: {
-							OR: [
-								{
-									id: {
-										notIn: await PrismaService.getInstance()
-											.crawlQueue.findMany({
-												select: { playerId: true }
-											})
-											.then((results) =>
-												results.map((r) => r.playerId)
-											)
-									}
-								}
-							]
+							id: {
+								notIn:
+									processedIds.length > 0
+										? processedIds
+										: ['']
+							}
 						},
-						take: limit || 1000,
+						take: limit || 100,
 						orderBy: {
 							lastSeen: 'desc'
 						}
@@ -291,7 +296,7 @@ export class Server {
 	public async start() {
 		try {
 			await this.connectWithRetry()
-			this.app.listen(this.config.port, () => {
+			this.app.listen(this.config.port, async () => {
 				console.log(`Server listening on port ${this.config.port}`)
 				console.log(
 					`Connected to Steam as: ${this.config.steamUsername}`
@@ -307,6 +312,7 @@ export class Server {
 						parseInt(process.env.CRAWLER_BATCH_SIZE || '5', 10),
 						parseInt(process.env.CRAWLER_MAX_RETRIES || '3', 10)
 					)
+					await this.viralCrawlerService.start()
 				}
 			})
 		} catch (err) {
