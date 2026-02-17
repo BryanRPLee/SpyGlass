@@ -114,6 +114,96 @@ graph LR
     Match6 --> P6c[Player P]
 ```
 
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    Player {
+      id String
+      accountId BigInt
+      lastSeen DateTime
+      createdAt DateTime
+      playerLevel Int
+      playerCurXp Int
+      vacBanned Boolean
+      penaltySeconds Int
+      penaltyReason Int
+      totalMatches Int
+      totalKills Int
+      totalDeaths Int
+      totalAssists Int
+      totalMvps Int
+      discoveredFromId String
+    }
+    Match {
+      id String
+      matchTime DateTime
+      createdAt DateTime
+      map String
+      duration Int
+      maxRounds Int
+      serverIp BigInt
+      tvPort Int
+      gameType Int
+      processed Boolean
+      roundStatsRaw String
+    }
+    MatchPlayer {
+      id String
+      matchId String
+      playerId String
+      createdAt DateTime
+      slot Int
+      team Int
+      kills Int
+      deaths Int
+      assists Int
+      mvps Int
+      score Int
+    }
+    Round {
+      id String
+      matchId String
+      roundNumber Int
+      createdAt DateTime
+      map String
+      roundResult Int
+      matchResult Int
+      teamScores String
+      kills String
+      deaths String
+      assists String
+      scores String
+      mvps String
+    }
+    CrawlQueue {
+      id String
+      playerId String
+      priority Int
+      attempts Int
+      lastAttempt DateTime
+      createdAt DateTime
+      status String
+      error String
+    }
+    CrawlStats {
+      id String
+      timestamp DateTime
+      totalPlayers Int
+      totalMatches Int
+      pendingCrawls Int
+      failedCrawls Int
+      avgMatchesPerPlayer Float
+    }
+
+    %% Relationships/Foreign keys
+    MatchPlayer }|--|| Match : "matchId"
+    MatchPlayer }|--|| Player : "playerId"
+    Round }|--|| Match : "matchId"
+    Player ||--o{ Player : "discoveredFromId"
+    CrawlQueue }|--|| Player : "playerId"
+```
+
 ---
 
 ## FAQ
