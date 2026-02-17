@@ -21,21 +21,21 @@ This means:
 - Repeat the above steps recursively such that it:
 - Builds a living, growing network of historical CS2 match data that bypasses Valve's 8 match window
 
-## Performance: Optimized Batching
+## Performance: optimised Batching
 
-SpyGlass uses an **optimized parallel crawler** inspired by high-scale data aggregation platforms like scope.gg and csstats.gg:
+SpyGlass uses an **optimised parallel crawler** inspired by high-scale data aggregation platforms like scope.gg and csstats.gg:
 
-### Key Optimizations
+### Key optimisations
 
 - **Parallel Processing**: Processes up to 10 players concurrently (configurable)
-- **Batch Database Operations**: Groups database updates to minimize round trips
+- **Batch Database Operations**: Groups database updates to minimise round trips
 - **Zero Artificial Delays**: Removed all fixed sleep timers between API calls
 - **Smart Rate Limiting**: Adaptive backoff only when rate limits are detected
 - **Concurrent Match Storage**: All matches for a player stored in parallel
 
 ### Performance Comparison
 
-| Metric                | Before Optimization | After Optimization         | Improvement       |
+| Metric                | Before optimisation | After optimisation         | Improvement       |
 | --------------------- | ------------------- | -------------------------- | ----------------- |
 | **Players per Batch** | 5                   | 20                         | 4x                |
 | **Processing Model**  | Sequential          | Parallel (10 concurrent)   | 10x               |
@@ -60,14 +60,14 @@ CRAWLER_RATE_LIMIT_BACKOFF_MS=30000 # Backoff duration on rate limit
 
 ### Architecture Improvements
 
-**Database Optimizations:**
+**Database optimisations:**
 
 - Batch `updateMany` operations for status changes
 - Parallel upserts during seeding
 - Graceful handling of unique constraint conflicts
 - In-memory locking prevents race conditions
 
-**API Call Optimizations:**
+**API Call optimisations:**
 
 - Profile and match history fetched in parallel
 - Match storage happens concurrently
@@ -105,6 +105,7 @@ graph LR
     MatchTable["Match Table"]
     MatchPlayerTable["MatchPlayer Table"]
     RoundTable["Round Table"]
+    RoundPlayerTable["RoundPlayer Table"]
     CrawlQueue["CrawlQueue Table"]
   end
 
@@ -122,6 +123,7 @@ graph LR
   MStorage -- writes --> MatchTable
   MStorage -- writes --> MatchPlayerTable
   MStorage -- writes --> RoundTable
+  MStorage -- writes --> RoundPlayerTable
 
   CrawlQueue -- used by --> Crawler
 
@@ -204,7 +206,6 @@ erDiagram
       tvPort Int
       gameType Int
       processed Boolean
-      roundStatsRaw String
     }
     MatchPlayer {
       id String
@@ -224,15 +225,25 @@ erDiagram
       matchId String
       roundNumber Int
       createdAt DateTime
+      duration Int
       map String
       roundResult Int
       matchResult Int
       teamScores String
-      kills String
-      deaths String
-      assists String
-      scores String
-      mvps String
+    }
+    RoundPlayer {
+      id String
+      roundId String
+      playerId String
+      playerIndex Int
+      accountId BigInt
+      kills Int
+      deaths Int
+      assists Int
+      score Int
+      mvps Int
+      headshots Int
+      enemyKills Int
     }
     CrawlQueue {
       id String
@@ -258,6 +269,8 @@ erDiagram
     MatchPlayer }|--|| Match : "matchId"
     MatchPlayer }|--|| Player : "playerId"
     Round }|--|| Match : "matchId"
+    RoundPlayer }|--|| Round : "roundId"
+    RoundPlayer }|--|| Player : "playerId"
     Player ||--o{ Player : "discoveredFromId"
     CrawlQueue }|--|| Player : "playerId"
 ```
@@ -270,7 +283,7 @@ erDiagram
 
 A: The crawler never fetches more than 8 matches per player, but by connecting the dots across all visible players, it indirectly reconstructs deep match/player histories.
 
-**Q: Can I get an entire region’s matches and player stats?**
+**Q: Can I get an entire region's matches and player stats?**
 
 A: Yes. The more seed IDs and the longer you let it run, the larger your web of tracked matches and players will be.
 
@@ -280,7 +293,7 @@ A: Yes. For players that have private profiles or are not opted-in to match trac
 
 **Q: How fast can the virus spread?**
 
-A: With optimized parallel batching, SpyGlass can process **7,200-14,400 players per hour** (24-48x faster than the original sequential implementation). The actual speed depends on Steam API response times and rate limits.
+A: With optimised parallel batching, SpyGlass can process **7,200-14,400 players per hour** (24-48x faster than the original sequential implementation). The actual speed depends on Steam API response times and rate limits.
 
 **Q: Does faster crawling violate Steam's rate limits?**
 
