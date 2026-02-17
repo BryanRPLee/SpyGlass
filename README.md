@@ -119,9 +119,11 @@ graph LR
 ## FAQ
 
 **Q: Is this compliant with what GC allows?**
+
 A: The crawler never fetches more than 8 matches per player, but by connecting the dots across all visible players, it indirectly reconstructs deep match/player histories.
 
-**Q: Can I get an entire region’s matches and player stats?**  
+**Q: Can I get an entire region’s matches and player stats?**
+
 A: Yes. The more seed IDs and the longer you let it run, the larger your web of tracked matches and players will be.
 
 ---
