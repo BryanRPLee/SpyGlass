@@ -91,8 +91,8 @@ export class SteamClient extends EventEmitter {
 		})
 	}
 
-	public async connect(): Promise<void> {
-		return new Promise((resolve, reject) => {
+	public async connect() {
+		return new Promise<void>((resolve, reject) => {
 			const timeout = setTimeout(
 				() => reject(new Error('Connection timeout')),
 				60000
@@ -152,7 +152,7 @@ export class SteamClient extends EventEmitter {
 		})
 	}
 
-	public async disconnect(): Promise<void> {
+	public async disconnect() {
 		this.user.logOff()
 		this.connected = false
 		this.gcConnected = false

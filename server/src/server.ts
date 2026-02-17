@@ -315,7 +315,7 @@ export class Server {
 		}
 	}
 
-	private async connectWithRetry(maxRetries = 3): Promise<void> {
+	private async connectWithRetry(maxRetries = 3) {
 		for (let attempt = 1; attempt <= maxRetries; attempt++) {
 			try {
 				console.log(`Connection attempt ${attempt}/${maxRetries}...`)

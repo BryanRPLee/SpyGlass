@@ -108,19 +108,17 @@ export class MatchStorageService {
 	public async storePlayerProfile(steamId: string, profile: any) {
 		const accountId = profile.account_id ? BigInt(profile.account_id) : null
 
-		// Check if accountId exists on a different player
 		if (accountId) {
 			const existingPlayer = await this.prisma.player.findUnique({
 				where: { accountId }
 			})
 
-			// If accountId exists on a different steamId, skip updating accountId
 			if (existingPlayer && existingPlayer.id !== steamId) {
 				await this.prisma.player.upsert({
 					where: { id: steamId },
 					create: {
 						id: steamId,
-						accountId: null, // Don't set conflicting accountId
+						accountId: null,
 						playerLevel: profile.player_level,
 						playerCurXp: profile.player_cur_xp,
 						vacBanned: profile.vac_banned || false,
@@ -128,7 +126,6 @@ export class MatchStorageService {
 						penaltyReason: profile.penalty_reason
 					},
 					update: {
-						// Don't update accountId to avoid conflict
 						playerLevel: profile.player_level,
 						playerCurXp: profile.player_cur_xp,
 						vacBanned: profile.vac_banned || false,

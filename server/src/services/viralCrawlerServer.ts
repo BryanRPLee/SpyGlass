@@ -190,7 +190,7 @@ export class ViralCrawlerService {
 		await this.sleep(5000)
 	}
 
-	private async logStats(): Promise<void> {
+	private async logStats() {
 		const [crawlStats, queueStats] = await Promise.all([
 			this.matchStorageService.getCrawlStats(),
 			this.prisma.crawlQueue.groupBy({
