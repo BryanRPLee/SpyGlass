@@ -21,6 +21,8 @@ export class MatchStorageService {
 		}
 
 		const playerIds = this.extractPlayerIds(match)
+		const demoFileUrl = this.extractDemoFileUrl(match)
+
 		await this.prisma.$transaction(async (tx) => {
 			for (const playerId of playerIds) {
 				await tx.player.upsert({
@@ -51,6 +53,7 @@ export class MatchStorageService {
 						: null,
 					tvPort: match.watchablematchinfo?.tv_port || null,
 					gameType: match.watchablematchinfo?.game_type || null,
+					demoFile: demoFileUrl,
 					processed: true
 				}
 			})
@@ -64,6 +67,7 @@ export class MatchStorageService {
 							matchId: prismaMatch.id,
 							roundNumber: i + 1,
 							duration: roundStat.match_duration,
+							map: roundStat.map,
 							roundResult: roundStat.round_result,
 							matchResult: roundStat.match_result,
 							teamScores: roundStat.team_scores
@@ -143,6 +147,9 @@ export class MatchStorageService {
 		})
 
 		console.log(`Stored match ${matchId} with ${playerIds.length} players`)
+		if (demoFileUrl) {
+			console.log(`Demo file: ${demoFileUrl}`)
+		}
 	}
 
 	public async storePlayerProfile(steamId: string, profile: any) {
@@ -232,18 +239,29 @@ export class MatchStorageService {
 			totalMatches,
 			totalMatchPlayers,
 			totalRounds,
-			totalRoundPlayers
+			totalRoundPlayers,
+			matchesWithDemos
 		] = await Promise.all([
 			this.prisma.player.count(),
 			this.prisma.match.count(),
 			this.prisma.matchPlayer.count(),
 			this.prisma.round.count(),
-			this.prisma.roundPlayer.count()
+			this.prisma.roundPlayer.count(),
+			this.prisma.match.count({
+				where: {
+					demoFile: {
+						not: null
+					}
+				}
+			})
 		])
+
 		const avgMatchesPerPlayer =
 			totalPlayers > 0 ? totalMatchPlayers / totalPlayers : 0
 		const avgRoundsPerMatch =
 			totalMatches > 0 ? totalRounds / totalMatches : 0
+		const demoFilePercentage =
+			totalMatches > 0 ? (matchesWithDemos / totalMatches) * 100 : 0
 
 		return {
 			totalPlayers,
@@ -251,9 +269,21 @@ export class MatchStorageService {
 			totalMatchPlayers,
 			totalRounds,
 			totalRoundPlayers,
+			matchesWithDemos,
 			avgMatchesPerPlayer: Math.round(avgMatchesPerPlayer * 100) / 100,
-			avgRoundsPerMatch: Math.round(avgRoundsPerMatch * 100) / 100
+			avgRoundsPerMatch: Math.round(avgRoundsPerMatch * 100) / 100,
+			demoFilePercentage: Math.round(demoFilePercentage * 100) / 100
 		}
+	}
+
+	private extractDemoFileUrl(match: Match): string | null {
+		if (!match.roundstatsall || match.roundstatsall.length === 0) {
+			return null
+		}
+
+		const lastRound = match.roundstatsall[match.roundstatsall.length - 1]
+
+		return lastRound.map || null
 	}
 
 	private extractPlayerIds(match: Match): string[] {
